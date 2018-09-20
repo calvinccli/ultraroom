@@ -26,11 +26,11 @@ import datetime
 import subprocess
 import xml.etree.ElementTree as ET
 # This is the hostname of the server running this page   
-HOST_NAME='0.0.0.0'
-# This is the hostname of the other server which have that directory #HOST_NAME_TARGET=sys.argv[1] 
-ssl_flag=sys.argv[1]
-PORT_NUMBER=7036
+HOST_NAME=socket.gethostname() + '.oob.disa.mil'
+# This is the hostname of the other server which have that directory #HOST_NAME_TARGET=sys.argv[1] ssl_flag=sys.argv[1]
+PORT_NUMBER=7026
 ebsRoot={}
+BPELFilePattern={}
 dictSOAPath={}
 BPELProcesses=[]
 BPELExt={}
@@ -61,14 +61,14 @@ class SimpleHTTPRequestHandler(BaseHTTPServer.BaseHTTPRequestHandler):
   def do_GET(self):
       """Serve a GET request."""
       print 'serve get request'
-      f = self.send_head()
+      f = self.send_head(True,'')
       if f:
           self.copyfile(f, self.wfile)
           f.close()
 
   def do_HEAD(self):
       """Serve a HEAD request."""
-      f = self.send_head()
+      f = self.send_head(True,'')
       if f:
           f.close()
 
@@ -86,26 +86,28 @@ class SimpleHTTPRequestHandler(BaseHTTPServer.BaseHTTPRequestHandler):
 
       r, info = self.deal_post_data()
       print r, info, "by: ", self.client_address
-      f = StringIO()
-      f.write('<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 3.2 Final//EN">')
-      f.write("<html>\n<title>Upload Result Page</title>\n")
-      f.write("<body>\n<h2>Upload Result Page</h2>\n")
-      f.write("<hr>\n")
-      if r:
-          f.write("<strong>Success:</strong>")
-      else:
-          f.write("<strong>Failed:</strong>")
-      f.write(info)
+      print info
+      f = self.send_head(r,info)
+      #f = StringIO()
+      #f.write('<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 3.2 Final//EN">')
+      #f.write("<html>\n<title>Upload Result Page</title>\n")
+      #f.write("<body>\n<h2>Upload Result Page</h2>\n")
+      #f.write("<hr>\n")
+      #if r:
+      #    f.write("<strong>Success:</strong>")
+      #else:
+      #    f.write("<strong>Failed:</strong>")
+      #f.write(info)
       ####f.write("<br><a href=\"%s\">back</a>" % self.headers['referer'])
-      f.write("<hr><small>Powerd By: DAI")
+      #f.write("<hr><small>Powerd By: DAI")
       ####f.write("<a href=\"Caution-http://li2z.cn/?s=SimpleHTTPServerWithUpload < Caution-http://li2z.cn/?s=SimpleHTTPServerWithUpload > \">")
-      f.write("here</a>.</small></body>\n</html>\n")
-      length = f.tell()
-      f.seek(0)
-      self.send_response(200)
-      self.send_header("Content-type", "text/html")
-      self.send_header("Content-Length", str(length))
-      self.end_headers()
+      #f.write("here</a>.</small></body>\n</html>\n")
+      #length = f.tell()
+      #f.seek(0)
+      #self.send_response(200)
+      #self.send_header("Content-type", "text/html")
+      #self.send_header("Content-Length", str(length))
+      #self.end_headers()
       if f:
           self.copyfile(f, self.wfile)
           f.close()
@@ -115,6 +117,8 @@ class SimpleHTTPRequestHandler(BaseHTTPServer.BaseHTTPRequestHandler):
       global dictSOAPath
       global BPELProcesses
       global BPELExt
+      global BPELFilePattern
+      wrongExtension = False
       fh = open("./uploadFileHistory.log","a")
       boundary = self.headers.plisttext.split("=")[1]
       remainbytes = int(self.headers['content-length'])
@@ -197,10 +201,16 @@ class SimpleHTTPRequestHandler(BaseHTTPServer.BaseHTTPRequestHandler):
 
       ## check file extension 
       if fn[0][fn[0].rfind(".")+1:] not in BPELExt[bpelProcessId]:
+         self.rfile.read(remainbytes)
          return (False,"Invalid file extension. File has to have following extension " + str(BPELExt[bpelProcessId]))
+
+
+      if not re.match(BPELFilePattern[bpelProcessId],fn[0]):
+         self.rfile.read(remainbytes)
+         return (False,"Invalid file naming convention for this interface. File has to have following convention " + str(BPELFilePattern[bpelProcessId]))
+
       absolutePath=ebsRoot[ebs]+'/infgex/dai_inbound/DS_'+ebs+relativePath
       path = self.translate_path(self.path)
-      ##print path
       ##fn = os.path.join(path, fn[0])
       fn = os.path.join(absolutePath, fn[0]+'.1')
       line = self.rfile.readline()
@@ -229,8 +239,10 @@ class SimpleHTTPRequestHandler(BaseHTTPServer.BaseHTTPRequestHandler):
                  try:
                    xm=ET.fromstring(fileValue)
                  except Exception as e:
-                   out.close()
-                   os.remove(out.name)
+                   if os.path.isdir(ebsRoot[ebs]):
+                      print('test')
+                      out.close()
+                      os.remove(out.name)
                    return(False,"This XML file is invalid  - " + str(e))
               if os.path.isdir(ebsRoot[ebs]):
                  ##out.write(preline)
@@ -257,7 +269,7 @@ class SimpleHTTPRequestHandler(BaseHTTPServer.BaseHTTPRequestHandler):
               preline = line
       return (False, "Unexpect Ends of data.")
 
-  def send_head(self):
+  def send_head(self,returnCode,errorMessage):
       """Common code for GET and HEAD commands.
 
       This sends the response code and MIME headers.
@@ -296,7 +308,7 @@ class SimpleHTTPRequestHandler(BaseHTTPServer.BaseHTTPRequestHandler):
                   path = index
                   break
           else:
-              return self.upload_page(path,issued_to)
+              return self.upload_page(path,issued_to,returnCode,errorMessage)
       ctype = self.guess_type(path)
       try:
           # Always read in binary mode. Opening files in text mode may cause
@@ -320,10 +332,12 @@ class SimpleHTTPRequestHandler(BaseHTTPServer.BaseHTTPRequestHandler):
       global dictSOAPath
       global ebsRoot
       global BPELExt
+      global BPELFilePattern
       BPELProcesses=[]
       dictSOAPath={}
       ebsRoot={}
       BPELExt={}
+      BPELFilePattern={}
       try:
          with open("./BPELProcess.properties") as bp:
           for line in bp:
@@ -331,6 +345,7 @@ class SimpleHTTPRequestHandler(BaseHTTPServer.BaseHTTPRequestHandler):
               BPELProcesses.append((bitem[0],bitem[1]))
               dictSOAPath[bitem[0]]=[bitem[2]]
               BPELExt[bitem[0]]=bitem[3]
+              BPELFilePattern[bitem[0]]=bitem[4].rstrip()
       except:
           self.send_error(500, "Error in reading BPELProcess.properties")
           return None
@@ -342,9 +357,15 @@ class SimpleHTTPRequestHandler(BaseHTTPServer.BaseHTTPRequestHandler):
       except:
           self.send_error(500, "Error in reading soaconnection.properties")
           return None
+      try:
+          with open("./EBSExclusion.properties") as el:
+           for line in el:
+               ebsRoot.pop(line.rstrip(),None)
+      except:
+          return' Success' 
       return 'Success'
 
-  def upload_page(self, path,issued_to):
+  def upload_page(self, path,issued_to,returnCode,errorMessage):
       """Helper to produce a directory listing (absent index.html).
 
       Return value is either a file object, or None (indicating an
@@ -379,6 +400,12 @@ class SimpleHTTPRequestHandler(BaseHTTPServer.BaseHTTPRequestHandler):
       f.write("<style>p.ex1 {font: italic bold 15px/30px Georgia, serif;} table {font-size: 70%; font-family: \"Myriad Web\", Verdana, Helvetica,Arial,sans-serif; border-collapse: collapse;} table, th, td {border:1px solid black;}</style>\n")
       f.write("<body>\n<h2>Upload file to DAI</h2>\n")
       f.write("<hr>\n")
+      if errorMessage:
+         if returnCode:
+            f.write("<font color=\"black\">Success : " + errorMessage + "</font>")
+         else:
+            f.write("<font color=\"red\">Failed : " + errorMessage + "</font>")
+         f.write("<hr>\n")
       f.write("<form ENCTYPE=\"multipart/form-data\" method=\"post\">")
       f.write("<input type=\"hidden\" name=\"username\" value=\""+issued_to+"\"/>")
       f.write("<select name=\"ebsInstance\">")
@@ -488,6 +515,7 @@ class SimpleHTTPRequestHandler(BaseHTTPServer.BaseHTTPRequestHandler):
       '.c': 'text/plain',
       '.h': 'text/plain',
       '.log': 'text/plain',
+      '.properties': 'text/plain',
       })
 
 
@@ -498,11 +526,7 @@ def test(HandlerClass = SimpleHTTPRequestHandler,
 
 if __name__ == '__main__':
   ##test()
-  print '122333'
   ServerClass=BaseHTTPServer.HTTPServer
-  print HOST_NAME
-  cwd=os.getcwd()
-  print cwd
   httpd=ServerClass((HOST_NAME,PORT_NUMBER),SimpleHTTPRequestHandler)    
   if  ssl_flag=='ssl': 
       httpd.socket= ssl.wrap_socket(httpd.socket, certfile='./sslkey/server_unencrypted.pem',server_side=True,cert_reqs=ssl.CERT_REQUIRED, ca_certs='./sslkey/clientCA.pem')
